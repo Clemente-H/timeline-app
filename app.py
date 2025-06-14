@@ -31,13 +31,17 @@ def guardar_eventos(df):
     """Guarda eventos en CSV"""
     df.to_csv(CSV_FILE, index=False)
 
-def crear_timeline(df):
+def crear_timeline(df, config):
     """Crea la visualización de timeline con Plotly"""
     fig = go.Figure()
     
-    # Fechas límite
-    fecha_inicio = datetime(2022, 1, 1)
-    fecha_fin = datetime(2027, 12, 31)
+    # Fechas límite desde configuración
+    fecha_inicio = datetime.combine(config['fecha_inicio'], datetime.min.time())
+    fecha_fin = datetime.combine(config['fecha_fin'], datetime.min.time())
+    
+    # Calcular años en el rango
+    año_inicio = config['fecha_inicio'].year
+    año_fin = config['fecha_fin'].year
     
     # Línea base de timeline más gruesa
     fig.add_trace(go.Scatter(
@@ -51,10 +55,20 @@ def crear_timeline(df):
     ))
     
     # Marcadores de años centrados con períodos
-    for year in range(2022, 2028):
+    for year in range(año_inicio, año_fin + 1):
         fecha_inicio_year = datetime(year, 1, 1)
         fecha_fin_year = datetime(year, 12, 31)
         fecha_centro_year = datetime(year, 7, 1)  # Centro del año
+        
+        # Asegurar que las fechas estén dentro del rango
+        if fecha_inicio_year < fecha_inicio:
+            fecha_inicio_year = fecha_inicio
+        if fecha_fin_year > fecha_fin:
+            fecha_fin_year = fecha_fin
+        if fecha_centro_year < fecha_inicio:
+            fecha_centro_year = fecha_inicio
+        if fecha_centro_year > fecha_fin:
+            fecha_centro_year = fecha_fin
         
         # Línea vertical de inicio de año
         fig.add_trace(go.Scatter(
@@ -91,27 +105,28 @@ def crear_timeline(df):
         for month in range(1, 13):
             if month != 1:  # Skip enero (ya está el año)
                 fecha_month = datetime(year, month, 1)
-                fig.add_trace(go.Scatter(
-                    x=[fecha_month, fecha_month],
-                    y=[0.9, 1.1],
-                    mode='lines',
-                    line=dict(color='#BDC3C7', width=1),
-                    showlegend=False,
-                    hoverinfo='skip',
-                    name=""
-                ))
-                
-                # Número del mes en gris claro
-                fig.add_annotation(
-                    x=fecha_month,
-                    y=0.8,
-                    text=str(month),
-                    showarrow=False,
-                    font=dict(size=8, color='#BDC3C7')
-                )
+                if fecha_inicio <= fecha_month <= fecha_fin:
+                    fig.add_trace(go.Scatter(
+                        x=[fecha_month, fecha_month],
+                        y=[0.9, 1.1],
+                        mode='lines',
+                        line=dict(color='#BDC3C7', width=1),
+                        showlegend=False,
+                        hoverinfo='skip',
+                        name=""
+                    ))
+                    
+                    # Número del mes en gris claro
+                    fig.add_annotation(
+                        x=fecha_month,
+                        y=0.8,
+                        text=str(month),
+                        showarrow=False,
+                        font=dict(size=8, color='#BDC3C7')
+                    )
     
-    # Línea vertical final (cierre de 2027)
-    fecha_final = datetime(2027, 12, 31)
+    # Línea vertical final (cierre del último año)
+    fecha_final = fecha_fin
     fig.add_trace(go.Scatter(
         x=[fecha_final, fecha_final],
         y=[0.7, 1.3],
@@ -124,100 +139,110 @@ def crear_timeline(df):
     
     # Eventos con cuatro alturas - recálculo dinámico
     if not df.empty:
-        # Ordenar eventos por fecha para distribuir alturas
-        df_sorted = df.sort_values('fecha').reset_index(drop=True)
-        alturas = [1.5, 1.8, 2.1, 2.4]  # Cuatro alturas diferentes
+        # Filtrar eventos que estén dentro del rango de fechas
+        df_filtrado = df[
+            (df['fecha'] >= fecha_inicio) & 
+            (df['fecha'] <= fecha_fin)
+        ].copy()
         
-        # Algoritmo para evitar colapso: eventos cercanos van a alturas diferentes
-        alturas_asignadas = []
-        for i, evento in df_sorted.iterrows():
-            # Para eventos cercanos (menos de 60 días), usar altura diferente
-            altura_usada = i % 4
+        if not df_filtrado.empty:
+            # Ordenar eventos por fecha para distribuir alturas
+            df_sorted = df_filtrado.sort_values('fecha').reset_index(drop=True)
+            alturas = [1.5, 1.8, 2.1, 2.4]  # Cuatro alturas diferentes
             
-            # Verificar si hay eventos muy cercanos y ajustar
-            if i > 0:
-                fecha_actual = evento['fecha']
-                fecha_anterior = df_sorted.iloc[i-1]['fecha']
-                dias_diferencia = (fecha_actual - fecha_anterior).days
+            # Algoritmo para evitar colapso: eventos cercanos van a alturas diferentes
+            alturas_asignadas = []
+            for i, evento in df_sorted.iterrows():
+                # Para eventos cercanos (menos de 60 días), usar altura diferente
+                altura_usada = i % 4
                 
-                # Si están muy cerca (menos de 45 días), forzar altura diferente
-                if dias_diferencia < 45:
-                    altura_anterior = alturas_asignadas[-1]
-                    altura_idx_anterior = alturas.index(altura_anterior)
-                    altura_usada = (altura_idx_anterior + 1) % 4
+                # Verificar si hay eventos muy cercanos y ajustar
+                if i > 0:
+                    fecha_actual = evento['fecha']
+                    fecha_anterior = df_sorted.iloc[i-1]['fecha']
+                    dias_diferencia = (fecha_actual - fecha_anterior).days
+                    
+                    # Si están muy cerca (menos de 45 días), forzar altura diferente
+                    if dias_diferencia < 45:
+                        altura_anterior = alturas_asignadas[-1]
+                        altura_idx_anterior = alturas.index(altura_anterior)
+                        altura_usada = (altura_idx_anterior + 1) % 4
+                
+                alturas_asignadas.append(alturas[altura_usada])
             
-            alturas_asignadas.append(alturas[altura_usada])
-        
-        # 4 tonos de azul
-        colores = ['#0B2F3A', '#1B4F72', '#2E86C1', '#5DADE2']  # Muy oscuro, oscuro, medio, claro
-        
-        for i, (idx, evento) in enumerate(df_sorted.iterrows()):
-            altura_evento = alturas_asignadas[i]
-            altura_idx = alturas.index(altura_evento)
-            color_evento = colores[altura_idx]
+            # 4 tonos de azul
+            colores = ['#0B2F3A', '#1B4F72', '#2E86C1', '#5DADE2']  # Muy oscuro, oscuro, medio, claro
             
-            # Punto del evento más grande
-            fig.add_trace(go.Scatter(
-                x=[evento['fecha']],
-                y=[1],
-                mode='markers',
-                marker=dict(
-                    size=15,
-                    color=color_evento,
-                    symbol='diamond',
-                    line=dict(width=2, color='white')
-                ),
-                showlegend=False,
-                customdata=[evento['descripcion']],
-                hovertemplate=(
-                    "<b>%{text}</b><br>" +
-                    "Fecha: %{x|%d/%m/%Y}<br>" +
-                    "Descripción: %{customdata}<br>" +
-                    "<extra></extra>"
-                ),
-                text=evento['titulo'],
-                name=""
-            ))
-            
-            # Línea vertical hacia el título más fina
-            fig.add_trace(go.Scatter(
-                x=[evento['fecha'], evento['fecha']],
-                y=[1, altura_evento - 0.1],
-                mode='lines',
-                line=dict(color=color_evento, width=1.5),
-                showlegend=False,
-                hoverinfo='skip',
-                name=""
-            ))
-            
-            # Título del evento con mejor diseño
-            titulo_texto = evento['titulo']
-            if len(titulo_texto) > 20:
-                # Partir título largo en dos líneas
-                palabras = titulo_texto.split()
-                mitad = len(palabras) // 2
-                linea1 = ' '.join(palabras[:mitad])
-                linea2 = ' '.join(palabras[mitad:])
-                titulo_final = f"{linea1}<br>{linea2}"
-            else:
-                titulo_final = titulo_texto
-            
-            fig.add_annotation(
-                x=evento['fecha'],
-                y=altura_evento,
-                text=f"<b>{titulo_final}</b>",
-                showarrow=False,
-                font=dict(size=9, color='white'),
-                bgcolor=color_evento,
-                bordercolor=color_evento,
-                borderwidth=1,
-                borderpad=4
-            )
+            for i, (idx, evento) in enumerate(df_sorted.iterrows()):
+                altura_evento = alturas_asignadas[i]
+                altura_idx = alturas.index(altura_evento)
+                color_evento = colores[altura_idx]
+                
+                # Punto del evento más grande
+                fig.add_trace(go.Scatter(
+                    x=[evento['fecha']],
+                    y=[1],
+                    mode='markers',
+                    marker=dict(
+                        size=15,
+                        color=color_evento,
+                        symbol='diamond',
+                        line=dict(width=2, color='white')
+                    ),
+                    showlegend=False,
+                    customdata=[evento['descripcion']],
+                    hovertemplate=(
+                        "<b>%{text}</b><br>" +
+                        "Fecha: %{x|%d/%m/%Y}<br>" +
+                        "Descripción: %{customdata}<br>" +
+                        "<extra></extra>"
+                    ),
+                    text=evento['titulo'],
+                    name=""
+                ))
+                
+                # Línea vertical hacia el título más fina
+                fig.add_trace(go.Scatter(
+                    x=[evento['fecha'], evento['fecha']],
+                    y=[1, altura_evento - 0.1],
+                    mode='lines',
+                    line=dict(color=color_evento, width=1.5),
+                    showlegend=False,
+                    hoverinfo='skip',
+                    name=""
+                ))
+                
+                # Título del evento con mejor diseño
+                titulo_texto = evento['titulo']
+                if len(titulo_texto) > 20:
+                    # Partir título largo en dos líneas
+                    palabras = titulo_texto.split()
+                    mitad = len(palabras) // 2
+                    linea1 = ' '.join(palabras[:mitad])
+                    linea2 = ' '.join(palabras[mitad:])
+                    titulo_final = f"{linea1}<br>{linea2}"
+                else:
+                    titulo_final = titulo_texto
+                
+                fig.add_annotation(
+                    x=evento['fecha'],
+                    y=altura_evento,
+                    text=f"<b>{titulo_final}</b>",
+                    showarrow=False,
+                    font=dict(size=9, color='white'),
+                    bgcolor=color_evento,
+                    bordercolor=color_evento,
+                    borderwidth=1,
+                    borderpad=4
+                )
     
-    # Configuración del layout
+    # Configuración del layout con título dinámico
+    rango_años = f"{config['fecha_inicio'].year}-{config['fecha_fin'].year}"
+    titulo_completo = f"{config['titulo']} {rango_años}"
+    
     fig.update_layout(
         title={
-            'text': 'Timeline de Eventos 2022-2027',
+            'text': titulo_completo,
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 24, 'color': '#2E4057'}
@@ -254,8 +279,56 @@ st.markdown("Crea y visualiza eventos en una línea de tiempo interactiva")
 if 'df_eventos' not in st.session_state:
     st.session_state.df_eventos = pd.DataFrame(columns=['fecha', 'titulo', 'descripcion'])
 
+# Configuración de timeline editable
+if 'config_timeline' not in st.session_state:
+    st.session_state.config_timeline = {
+        'titulo': 'Timeline de Eventos',
+        'fecha_inicio': date(2022, 1, 1),
+        'fecha_fin': date(2027, 12, 31)
+    }
+
 # Sidebar para agregar eventos
 with st.sidebar:
+    st.header("⚙️ Configuración Timeline")
+    
+    # Configuración editable de la timeline
+    with st.expander("📝 Editar Timeline", expanded=False):
+        nuevo_titulo = st.text_input(
+            "Título de Timeline",
+            value=st.session_state.config_timeline['titulo'],
+            placeholder="Ej: Proyecto Alpha 2024-2026"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            nueva_fecha_inicio = st.date_input(
+                "Fecha Inicio",
+                value=st.session_state.config_timeline['fecha_inicio'],
+                min_value=date(2020, 1, 1),
+                max_value=date(2030, 12, 31)
+            )
+        
+        with col2:
+            nueva_fecha_fin = st.date_input(
+                "Fecha Fin",
+                value=st.session_state.config_timeline['fecha_fin'],
+                min_value=date(2020, 1, 1),
+                max_value=date(2030, 12, 31)
+            )
+        
+        if st.button("💾 Actualizar Timeline", use_container_width=True):
+            if nueva_fecha_fin > nueva_fecha_inicio:
+                st.session_state.config_timeline = {
+                    'titulo': nuevo_titulo,
+                    'fecha_inicio': nueva_fecha_inicio,
+                    'fecha_fin': nueva_fecha_fin
+                }
+                st.success("✅ Timeline actualizada!")
+            else:
+                st.error("❌ La fecha fin debe ser posterior a la fecha inicio")
+    
+    st.divider()
+    
     st.header("➕ Agregar Evento")
     
     # Upload CSV
@@ -303,9 +376,9 @@ with st.sidebar:
                     # Convertir fechas
                     df_uploaded['fecha'] = pd.to_datetime(df_uploaded['fecha'])
                     
-                    # Filtrar fechas válidas (2022-2027)
-                    fecha_min = datetime(2022, 1, 1)
-                    fecha_max = datetime(2027, 12, 31)
+                    # Filtrar fechas válidas según configuración
+                    fecha_min = datetime.combine(st.session_state.config_timeline['fecha_inicio'], datetime.min.time())
+                    fecha_max = datetime.combine(st.session_state.config_timeline['fecha_fin'], datetime.min.time())
                     df_uploaded = df_uploaded[
                         (df_uploaded['fecha'] >= fecha_min) & 
                         (df_uploaded['fecha'] <= fecha_max)
@@ -327,7 +400,8 @@ with st.sidebar:
                         st.session_state.last_uploaded_file = file_key
                         st.success(f"✅ {len(df_uploaded)} eventos agregados!")
                     else:
-                        st.warning("⚠️ No hay eventos válidos en el rango 2022-2027")
+                        rango = f"{st.session_state.config_timeline['fecha_inicio']} - {st.session_state.config_timeline['fecha_fin']}"
+                        st.warning(f"⚠️ No hay eventos válidos en el rango {rango}")
                 else:
                     st.error("❌ CSV debe tener columnas: fecha, titulo, descripcion")
             except Exception as e:
@@ -341,9 +415,9 @@ with st.sidebar:
     with st.form("form_evento"):
         fecha_evento = st.date_input(
             "Fecha",
-            min_value=date(2022, 1, 1),
-            max_value=date(2027, 12, 31),
-            value=date(2024, 1, 1)
+            min_value=st.session_state.config_timeline['fecha_inicio'],
+            max_value=st.session_state.config_timeline['fecha_fin'],
+            value=st.session_state.config_timeline['fecha_inicio']
         )
         
         titulo_evento = st.text_input(
@@ -377,7 +451,7 @@ with st.sidebar:
 # Timeline principal
 if not st.session_state.df_eventos.empty:
     st.subheader("Timeline")
-    fig = crear_timeline(st.session_state.df_eventos)
+    fig = crear_timeline(st.session_state.df_eventos, st.session_state.config_timeline)
     st.plotly_chart(fig, use_container_width=True)
     
     # Información de interactividad
@@ -387,7 +461,7 @@ else:
     st.info("📋 **Tu timeline está vacía.** Agrega eventos usando el formulario o sube un CSV para comenzar.")
     
     # Mostrar timeline vacía
-    fig = crear_timeline(pd.DataFrame(columns=['fecha', 'titulo', 'descripcion']))
+    fig = crear_timeline(pd.DataFrame(columns=['fecha', 'titulo', 'descripcion']), st.session_state.config_timeline)
     st.plotly_chart(fig, use_container_width=True)
 
 # Gestión de eventos
