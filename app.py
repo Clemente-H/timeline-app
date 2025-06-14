@@ -250,13 +250,93 @@ def crear_timeline(df):
 st.title("📅 Timeline de Eventos")
 st.markdown("Crea y visualiza eventos en una línea de tiempo interactiva")
 
-# Cargar datos
+# Cargar datos - iniciar vacío
 if 'df_eventos' not in st.session_state:
-    st.session_state.df_eventos = cargar_eventos()
+    st.session_state.df_eventos = pd.DataFrame(columns=['fecha', 'titulo', 'descripcion'])
 
 # Sidebar para agregar eventos
 with st.sidebar:
     st.header("➕ Agregar Evento")
+    
+    # Upload CSV
+    st.subheader("📁 Cargar CSV")
+    
+    # Template CSV para descargar
+    template_csv = """fecha,titulo,descripcion
+2024-01-15,Evento Ejemplo 1,Descripción del primer evento
+2024-06-30,Evento Ejemplo 2,Descripción del segundo evento
+2024-12-25,Evento Ejemplo 3,Descripción del tercer evento"""
+    
+    st.download_button(
+        label="📄 Descargar Template",
+        data=template_csv,
+        file_name="template_eventos.csv",
+        mime="text/csv",
+        help="Descarga un CSV de ejemplo con el formato correcto",
+        use_container_width=True
+    )
+    
+    st.markdown("")  # Espaciado
+    
+    uploaded_file = st.file_uploader(
+        "Subir CSV",
+        type=['csv'],
+        help="CSV con columnas: fecha,titulo,descripcion"
+    )
+    
+    # Procesar archivo solo cuando se sube uno nuevo
+    if uploaded_file is not None:
+        # Usar key único para evitar reprocesamiento
+        file_key = f"{uploaded_file.name}_{uploaded_file.size}"
+        
+        if 'last_uploaded_file' not in st.session_state:
+            st.session_state.last_uploaded_file = None
+            
+        if st.session_state.last_uploaded_file != file_key:
+            try:
+                # Leer CSV subido
+                df_uploaded = pd.read_csv(uploaded_file)
+                
+                # Validar columnas
+                required_columns = ['fecha', 'titulo', 'descripcion']
+                if all(col in df_uploaded.columns for col in required_columns):
+                    # Convertir fechas
+                    df_uploaded['fecha'] = pd.to_datetime(df_uploaded['fecha'])
+                    
+                    # Filtrar fechas válidas (2022-2027)
+                    fecha_min = datetime(2022, 1, 1)
+                    fecha_max = datetime(2027, 12, 31)
+                    df_uploaded = df_uploaded[
+                        (df_uploaded['fecha'] >= fecha_min) & 
+                        (df_uploaded['fecha'] <= fecha_max)
+                    ]
+                    
+                    if not df_uploaded.empty:
+                        # Agregar a eventos existentes
+                        st.session_state.df_eventos = pd.concat([
+                            st.session_state.df_eventos, 
+                            df_uploaded
+                        ], ignore_index=True)
+                        
+                        # Eliminar duplicados si existen
+                        st.session_state.df_eventos = st.session_state.df_eventos.drop_duplicates(
+                            subset=['fecha', 'titulo']
+                        ).reset_index(drop=True)
+                        
+                        guardar_eventos(st.session_state.df_eventos)
+                        st.session_state.last_uploaded_file = file_key
+                        st.success(f"✅ {len(df_uploaded)} eventos agregados!")
+                    else:
+                        st.warning("⚠️ No hay eventos válidos en el rango 2022-2027")
+                else:
+                    st.error("❌ CSV debe tener columnas: fecha, titulo, descripcion")
+            except Exception as e:
+                st.error(f"❌ Error al procesar CSV: {e}")
+    
+    st.divider()
+    
+    # Formulario individual
+    st.subheader("✏️ Agregar Individual")
     
     with st.form("form_evento"):
         fecha_evento = st.date_input(
@@ -295,12 +375,20 @@ with st.sidebar:
             st.rerun()
 
 # Timeline principal
-st.subheader("Timeline")
-fig = crear_timeline(st.session_state.df_eventos)
-st.plotly_chart(fig, use_container_width=True)
-
-# Información de interactividad
-st.info("💡 **Tip:** Haz hover sobre los eventos para ver detalles completos")
+if not st.session_state.df_eventos.empty:
+    st.subheader("Timeline")
+    fig = crear_timeline(st.session_state.df_eventos)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Información de interactividad
+    st.info("💡 **Tip:** Haz hover sobre los eventos para ver detalles completos")
+else:
+    st.subheader("Timeline")
+    st.info("📋 **Tu timeline está vacía.** Agrega eventos usando el formulario o sube un CSV para comenzar.")
+    
+    # Mostrar timeline vacía
+    fig = crear_timeline(pd.DataFrame(columns=['fecha', 'titulo', 'descripcion']))
+    st.plotly_chart(fig, use_container_width=True)
 
 # Gestión de eventos
 if not st.session_state.df_eventos.empty:
@@ -354,15 +442,18 @@ if not st.session_state.df_eventos.empty:
 
 # Exportar imagen
 st.subheader("📷 Exportar Timeline")
-st.markdown("""
-**Para exportar como imagen:**
-1. Haz clic en el ícono de cámara en la esquina superior derecha del gráfico
-2. Selecciona 'Download plot as PNG'
-3. La imagen se descargará automáticamente
+if not st.session_state.df_eventos.empty:
+    st.markdown("""
+    **Para exportar como imagen:**
+    1. Haz clic en el ícono de cámara en la esquina superior derecha del gráfico
+    2. Selecciona 'Download plot as PNG'
+    3. La imagen se descargará automáticamente
 
-**Tip:** Para mejor calidad en PPT, usa el PNG descargado directamente.
-""")
+    **Tip:** Para mejor calidad en PPT, usa el PNG descargado directamente.
+    """)
+else:
+    st.markdown("📋 Agrega eventos para poder exportar tu timeline como imagen.")
 
 # Footer
 st.markdown("---")
-st.markdown("💡 Los eventos se guardan automáticamente en `eventos.csv`")
+st.markdown("💡 Los eventos se guardan automáticamente durante la sesión")
